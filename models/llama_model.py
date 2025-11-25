@@ -37,18 +37,18 @@ class LLaMAHF(nn.Module):
         self.config = config
 
         cond_dim = config.T5_xxl_dim
-         
+
         self.transformer = nn.ModuleDict(
             dict(
-                wte=nn.Linear(input_token_dim, config.n_embd),   
-                cond_embed=nn.Linear(cond_dim, config.n_embd),  
+                wte=nn.Linear(input_token_dim, config.n_embd),
+                cond_embed=nn.Linear(cond_dim, config.n_embd),
                 h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
                 ln_f=RMSNorm(config.n_embd),
                 )
             )
-        
+
         target_channels = input_token_dim
-        from models.diffloss import DiffLoss
+        from .diffloss import DiffLoss
         self.diff_loss = DiffLoss(
                 target_channels=target_channels,
                 z_channels=config.n_embd,
@@ -59,7 +59,7 @@ class LLaMAHF(nn.Module):
             )
         self.diff_loss = self.diff_loss.to(device)
         self.out_proj = nn.Linear(config.n_embd, config.n_embd)
-        
+
 
     def _tie_or_clone_weights(self, output_embeddings, input_embeddings):
         """Tie or clone module weights depending of whether we are using TorchScript or not"""
@@ -80,13 +80,13 @@ class LLaMAHF(nn.Module):
 
     def get_input_embeddings(self):
         return self.transformer.wte
-    
+
     def set_input_embeddings(self, value):
         self.transformer.wte = value
 
     def get_output_embeddings(self):
         return self.lm_head
-    
+
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
@@ -95,11 +95,11 @@ class LLaMAHF(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layer))
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02 / math.sqrt(2 * self.config.n_layer))
-            
-    
+
+
 
     def forward_sample(self, idx: torch.Tensor, clip_feature: torch.Tensor, y_mask) -> torch.Tensor:
-        
+
         text_length = clip_feature.shape[1]
         if len(idx) == 0:
             x = self.llama_proj(clip_feature)[:, :int(y_mask[0].sum()), :]
@@ -118,48 +118,48 @@ class LLaMAHF(nn.Module):
         logits = x
         return logits
 
-    
+
 
     def sample_for_eval_CFG(self, text, length=196, tokenize_model=None, device=torch.device('cuda'), unit_length=4, cfg=4.0):
         max_token_len = length // unit_length
-        for k in range(max_token_len): 
+        for k in range(max_token_len):
             if k == 0:
                 x = []
             else:
                 x = xs
-            
+
             feat_text = torch.from_numpy(tokenize_model.encode(text)).float()
             feat_text = feat_text.to(device)
             conditions = self.forward(x, feat_text)
-            conditions = conditions[:, -1, :]                            
-            
+            conditions = conditions[:, -1, :]
+
             empty_text = ''
-            empty_feat_text = torch.from_numpy(tokenize_model.encode(empty_text)).float()   
+            empty_feat_text = torch.from_numpy(tokenize_model.encode(empty_text)).float()
             empty_feat_text = empty_feat_text.unsqueeze(0)
             empty_feat_text = empty_feat_text.to(device)
-            empty_conditions = self.forward(x, empty_feat_text)       
-            empty_conditions = empty_conditions[:, -1, :]                             
+            empty_conditions = self.forward(x, empty_feat_text)
+            empty_conditions = empty_conditions[:, -1, :]
             temperature = 1.0
-            
+
             # chunk
             if cfg != 1:
-                mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-                sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)          
+                mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+                sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:   # no cfg
-                scaled_logits = self.diff_loss.sample(conditions, temperature=temperature, cfg=1) 
+                scaled_logits = self.diff_loss.sample(conditions, temperature=temperature, cfg=1)
 
-            scaled_logits = scaled_logits.unsqueeze(0)     
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if k == 0:
                 xs = scaled_logits
             else:
                 xs = torch.cat((xs, scaled_logits), dim=1)
 
         return xs
-    
-    
-    
+
+
+
     # For inference, can stop sampling when the distance between the current token and the reference end token is less than the threshold.
     def sample_for_eval_CFG_inference(self, text, length=312, tokenizer=None, device=torch.device('cuda'), unit_length=4, reference_end_latent=None, threshold=0.1, cfg=4.0, temperature=1.0):
         max_token_len = length // unit_length
@@ -171,30 +171,30 @@ class LLaMAHF(nn.Module):
         empty_feat_text = torch.from_numpy(tokenizer.encode(empty_text)).float()   # torch.Size([32, 768])
         empty_feat_text = empty_feat_text.unsqueeze(0)
         empty_feat_text = empty_feat_text.to(device)
-        
-        for k in range(max_token_len): 
+
+        for k in range(max_token_len):
             if k == 0:
                 x = []
             else:
                 x = xs
-                
-            conditions = self.forward_inference(x, feat_text)
-            conditions = conditions[:, -1, :]                            
 
-            empty_conditions = self.forward(x, empty_feat_text)       
-            empty_conditions = empty_conditions[:, -1, :]                             
-            
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+            conditions = self.forward_inference(x, feat_text)
+            conditions = conditions[:, -1, :]
+
+            empty_conditions = self.forward(x, empty_feat_text)
+            empty_conditions = empty_conditions[:, -1, :]
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)           
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if reference_end_latent is not None:
                 distance_l2 = torch.sqrt(torch.sum((scaled_logits - reference_end_latent)**2))
                 print(distance_l2)
@@ -208,13 +208,13 @@ class LLaMAHF(nn.Module):
 
         return xs
 
-        
+
     def sample_for_eval_CFG_inference2(self, feat_clip_text, empty_feat_clip_text, if_categorial=False, length=312, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4, reference_end_token=None, threshold=3, cfg=4.5, temperature=1.0):
-       
+
         import clip
         max_token_len = length // unit_length
-        
-        for k in range(max_token_len): 
+
+        for k in range(max_token_len):
             if k == 0:
                 x = []
             else:
@@ -224,26 +224,26 @@ class LLaMAHF(nn.Module):
                 conditions = self.forward(x, feat_clip_text)
             except:
                 conditions = self.forward(x, feat_clip_text.unsqueeze(0))
-            
-            
-            conditions = conditions[:, -1, :]                            
-            
-            
 
-            empty_conditions = self.forward(x, empty_feat_clip_text)       
-            empty_conditions = empty_conditions[:, -1, :]                             
-            
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+
+            conditions = conditions[:, -1, :]
+
+
+
+            empty_conditions = self.forward(x, empty_feat_clip_text)
+            empty_conditions = empty_conditions[:, -1, :]
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)           
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if reference_end_token is not None:
                 distance_l2 = torch.sqrt(torch.sum((scaled_logits - reference_end_token)**2))
                 print(distance_l2)
@@ -258,43 +258,43 @@ class LLaMAHF(nn.Module):
         return xs
 
     def sample_for_eval_CFG_inference_next_one(self, current_token=[], feat_clip_text=None, empty_feat_clip_text=None, if_categorial=False, length=312, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4, reference_end_token=None, threshold=3, cfg=4.5, temperature=1.0):
-        
+
         import clip
         max_token_len = length // unit_length
-       
-        
-        for k in range(1): 
-            
+
+
+        for k in range(1):
+
             if current_token == []:
                 x = []
             else:
                 x = torch.cat(current_token, dim=1)
-            
-            
+
+
             try:
                 conditions = self.forward(x, feat_clip_text)
             except:
                 conditions = self.forward(x, feat_clip_text.unsqueeze(0))
-            
-            
-            conditions = conditions[:, -1, :]                             
-            
 
-            empty_conditions = self.forward(x, empty_feat_clip_text)      
-            empty_conditions = empty_conditions[:, -1, :]                         
 
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)   
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+            conditions = conditions[:, -1, :]
+
+
+            empty_conditions = self.forward(x, empty_feat_clip_text)
+            empty_conditions = empty_conditions[:, -1, :]
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)         
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
 
-            scaled_logits = scaled_logits.unsqueeze(0)    
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
 
             if k == 0:
                 xs = scaled_logits
@@ -302,7 +302,7 @@ class LLaMAHF(nn.Module):
                 xs = torch.cat((xs, scaled_logits), dim=1)
 
         return xs
-    
+
 
     def sample_for_eval_CFG_babel(self, A_text, B_text, A_motion, if_categorial=False, length=6400, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4, reference_end_token=None, cfg=7.0, threshold=3):
 
@@ -310,8 +310,8 @@ class LLaMAHF(nn.Module):
         B_token_length = length // unit_length - A_motion.shape[0]
 
         if tokenizer == 'clip':
-            A_text = clip.tokenize(A_text, truncate=True).to(device) 
-            A_feat_clip_text = clip_model.encode_text(A_text).float()  
+            A_text = clip.tokenize(A_text, truncate=True).to(device)
+            A_feat_clip_text = clip_model.encode_text(A_text).float()
             B_text = clip.tokenize(B_text, truncate=True).to(device)
             B_feat_clip_text = clip_model.encode_text(B_text).float()
         elif tokenizer == 't5-xxl':
@@ -319,7 +319,7 @@ class LLaMAHF(nn.Module):
             A_feat_clip_text = A_feat_clip_text.to(device)
             B_feat_clip_text = torch.from_numpy(clip_model.encode(B_text)).float()
             B_feat_clip_text = B_feat_clip_text.to(device)
-        
+
         A_text_embeddings = self.transformer.cond_embed(A_feat_clip_text).unsqueeze(0)
         B_text_embeddings = self.transformer.cond_embed(B_feat_clip_text).unsqueeze(0)
 
@@ -327,56 +327,56 @@ class LLaMAHF(nn.Module):
         A_motion_embeddings = self.transformer.wte(A_motion)
         B_motion = torch.tensor([]).to(device)
 
-        for k in range(B_token_length): 
+        for k in range(B_token_length):
             if k == 0:
                 x = torch.cat([A_text_embeddings, A_motion_embeddings, B_text_embeddings], dim=1)
             else:
                 x = xs
 
-            
+
             conditions = self.forward_babel_eval(x)
-            conditions = conditions[:, -1, :]                       
+            conditions = conditions[:, -1, :]
 
             empty_clip_text = ''
             if tokenizer == 'clip':
                 empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
                 empty_feat_clip_text = clip_model.encode_text(empty_text).float()
             elif tokenizer == 't5-xxl':
-                empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()   
+                empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()
                 empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
                 empty_feat_clip_text = empty_feat_clip_text.to(device)
 
             empty_feat_clip_text_embedding = self.transformer.cond_embed(empty_feat_clip_text).unsqueeze(0)
-            
+
             if k == 0:
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, empty_feat_clip_text_embedding], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
             else:
                 B_motion_embeddings = self.transformer.wte(B_motion)
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, empty_feat_clip_text_embedding, B_motion_embeddings], dim=1)
-                empty_conditions = self.forward_babel_eval(empty_input)      
-            
-            empty_conditions = empty_conditions[:, -1, :]                            
+                empty_conditions = self.forward_babel_eval(empty_input)
+
+            empty_conditions = empty_conditions[:, -1, :]
             temperature = 1.0
-            
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)    
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)           
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
 
             B_motion = torch.cat((B_motion, scaled_logits), dim=1)
 
             scaled_logits_embedding = self.transformer.wte(scaled_logits)
             xs = torch.cat((x, scaled_logits_embedding), dim=1)
-            
+
 
         return xs, B_motion
 
@@ -386,16 +386,16 @@ class LLaMAHF(nn.Module):
         B_token_length = length // unit_length - A_motion.shape[0]
 
         if tokenizer == 'clip':
-            A_text = clip.tokenize(A_text, truncate=True).to(device)  
-            A_feat_clip_text = clip_model.encode_text(A_text).float()  
+            A_text = clip.tokenize(A_text, truncate=True).to(device)
+            A_feat_clip_text = clip_model.encode_text(A_text).float()
             B_text = clip.tokenize(B_text, truncate=True).to(device)
             B_feat_clip_text = clip_model.encode_text(B_text).float()
         elif tokenizer == 't5-xxl':
-            A_feat_clip_text = torch.from_numpy(clip_model.encode(A_text)).float()   
+            A_feat_clip_text = torch.from_numpy(clip_model.encode(A_text)).float()
             A_feat_clip_text = A_feat_clip_text.to(device)
             B_feat_clip_text = torch.from_numpy(clip_model.encode(B_text)).float()
             B_feat_clip_text = B_feat_clip_text.to(device)
-        
+
         A_text_embeddings = self.transformer.cond_embed(A_feat_clip_text).unsqueeze(0)
         A_text_embeddings = A_text_embeddings.unsqueeze(0)
         B_text_embeddings = self.transformer.cond_embed(B_feat_clip_text).unsqueeze(0)
@@ -407,30 +407,30 @@ class LLaMAHF(nn.Module):
 
         attention_weights = []
 
-        for k in range(B_token_length): 
-            if k == 0:    
+        for k in range(B_token_length):
+            if k == 0:
                 x = torch.cat([A_text_embeddings, A_motion_embeddings, B_text_embeddings], dim=1)
-                
+
             else:
                 x = xs
 
-            
-            
+
+
             conditions = self.forward_babel_eval(x, return_attention=False)
-            conditions = conditions[:, -1, :]                            
+            conditions = conditions[:, -1, :]
 
             empty_clip_text = ''
             if tokenizer == 'clip':
                 empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
                 empty_feat_clip_text = clip_model.encode_text(empty_text).float()
             elif tokenizer == 't5-xxl':
-                empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()   
+                empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()
                 empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
                 empty_feat_clip_text = empty_feat_clip_text.to(device)
 
             empty_feat_clip_text_embedding = self.transformer.cond_embed(empty_feat_clip_text).unsqueeze(0)
-            
-            if k == 0:    
+
+            if k == 0:
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, empty_feat_clip_text_embedding], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
             else:
@@ -438,44 +438,44 @@ class LLaMAHF(nn.Module):
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, empty_feat_clip_text_embedding, B_motion_embeddings], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
 
-            empty_conditions = empty_conditions[:, -1, :]                             
+            empty_conditions = empty_conditions[:, -1, :]
             temperature = 1.0
-            
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)    
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg) 
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)        
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
-            scaled_logits = scaled_logits.unsqueeze(0)     
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if reference_end_token is not None:
                 distance_l2 = torch.sqrt(torch.sum((scaled_logits - reference_end_token)**2))
                 print(distance_l2)
                 if distance_l2 < threshold:
                     break
-            
+
             B_motion = torch.cat((B_motion, scaled_logits), dim=1)
 
             scaled_logits_embedding = self.transformer.wte(scaled_logits)
             xs = torch.cat((x, scaled_logits_embedding), dim=1)
-            
-        
-        
+
+
+
         return xs, B_motion
-    
+
 
     def sample_for_eval_CFG_babel_inference_new(self, B_text, A_motion, if_categorial=False, length=78, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4, reference_end_token=None, cfg=4.5, threshold=3):
 
-        import clip 
+        import clip
         B_token_length = length // unit_length
 
         if tokenizer == 'clip':
-            A_text = clip.tokenize(A_text, truncate=True).to(device)  
-            A_feat_clip_text = clip_model.encode_text(A_text).float()  
+            A_text = clip.tokenize(A_text, truncate=True).to(device)
+            A_feat_clip_text = clip_model.encode_text(A_text).float()
             B_text = clip.tokenize(B_text, truncate=True).to(device)
             B_feat_clip_text = clip_model.encode_text(B_text).float()
         elif tokenizer == 't5-xxl':
@@ -487,78 +487,78 @@ class LLaMAHF(nn.Module):
             empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
             empty_feat_clip_text = clip_model.encode_text(empty_text).float()
         elif tokenizer == 't5-xxl':
-            empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()   
+            empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()
             empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
             empty_feat_clip_text = empty_feat_clip_text.to(device)
-        
+
         B_text_embeddings = self.transformer.cond_embed(B_feat_clip_text).unsqueeze(0)
 
         A_motion = A_motion.unsqueeze(0)
         A_motion_embeddings = self.transformer.wte(A_motion)
         B_motion = torch.tensor([]).to(device)
 
-    
+
         attention_weights = []
 
-        for k in range(B_token_length): 
-            if k == 0: 
+        for k in range(B_token_length):
+            if k == 0:
                 x = torch.cat([B_text_embeddings, A_motion_embeddings], dim=1)
             else:
                 x = xs
 
             conditions = self.forward_babel_eval(x, return_attention=False)
-            conditions = conditions[:, -1, :]                             
-            
+            conditions = conditions[:, -1, :]
+
 
             empty_feat_clip_text_embedding = self.transformer.cond_embed(empty_feat_clip_text).unsqueeze(0)
-            
+
             if k == 0:
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings], dim=1)
-                
+
                 empty_conditions = self.forward_babel_eval(empty_input)
             else:
                 B_motion_embeddings = self.transformer.wte(B_motion)
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, B_motion_embeddings], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
 
-            empty_conditions = empty_conditions[:, -1, :]                             
+            empty_conditions = empty_conditions[:, -1, :]
             temperature = 1.0
-           
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg) 
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)       
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if reference_end_token is not None:
                 distance_l2 = torch.sqrt(torch.sum((scaled_logits - reference_end_token)**2))
                 print(distance_l2)
                 if distance_l2 < threshold:
                     break
-            
+
             B_motion = torch.cat((B_motion, scaled_logits), dim=1)
 
             scaled_logits_embedding = self.transformer.wte(scaled_logits)
             xs = torch.cat((x, scaled_logits_embedding), dim=1)
-            
-        
-        
+
+
+
         return xs, B_motion
 
 
     def sample_for_eval_CFG_babel_inference_new_demo(self, B_text, A_motion, if_categorial=False, length=312, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4, reference_end_token=None, cfg=4.5, threshold=3, temperature=1.0):
 
-        import clip 
+        import clip
         B_token_length = length // unit_length - A_motion.shape[0]
-        
+
         if tokenizer == 'clip':
-            A_text = clip.tokenize(A_text, truncate=True).to(device) 
-            A_feat_clip_text = clip_model.encode_text(A_text).float()  
+            A_text = clip.tokenize(A_text, truncate=True).to(device)
+            A_feat_clip_text = clip_model.encode_text(A_text).float()
             B_text = clip.tokenize(B_text, truncate=True).to(device)
             B_feat_clip_text = clip_model.encode_text(B_text).float()
         elif tokenizer == 't5-xxl':
@@ -570,10 +570,10 @@ class LLaMAHF(nn.Module):
             empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
             empty_feat_clip_text = clip_model.encode_text(empty_text).float()
         elif tokenizer == 't5-xxl':
-            empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()   
+            empty_feat_clip_text = torch.from_numpy(clip_model.encode(empty_clip_text)).float()
             empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
             empty_feat_clip_text = empty_feat_clip_text.to(device)
-        
+
         B_text_embeddings = self.transformer.cond_embed(B_feat_clip_text).unsqueeze(0)
         B_text_embeddings = B_text_embeddings.unsqueeze(0)
 
@@ -584,20 +584,20 @@ class LLaMAHF(nn.Module):
         # 存储所有层的注意力权重
         attention_weights = []
 
-        for k in range(B_token_length): 
-            if k == 0: 
+        for k in range(B_token_length):
+            if k == 0:
                 x = torch.cat([B_text_embeddings, A_motion_embeddings], dim=1)
-               
+
             else:
                 x = xs
 
-            
+
             conditions = self.forward_babel_eval(x, return_attention=False)
-            conditions = conditions[:, -1, :]                             
-            
+            conditions = conditions[:, -1, :]
+
 
             empty_feat_clip_text_embedding = self.transformer.cond_embed(empty_feat_clip_text).unsqueeze(0)
-            
+
             if k == 0:
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
@@ -606,90 +606,90 @@ class LLaMAHF(nn.Module):
                 empty_input = torch.cat([empty_feat_clip_text_embedding, A_motion_embeddings, B_motion_embeddings], dim=1)
                 empty_conditions = self.forward_babel_eval(empty_input)
 
-            empty_conditions = empty_conditions[:, -1, :]                             
-           
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+            empty_conditions = empty_conditions[:, -1, :]
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)           
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-            
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if reference_end_token is not None:
                 distance_l2 = torch.sqrt(torch.sum((scaled_logits - reference_end_token)**2))
                 print(distance_l2)
                 if distance_l2 < threshold and k > 10:
                     break
-            
+
             B_motion = torch.cat((B_motion, scaled_logits), dim=1)
 
             scaled_logits_embedding = self.transformer.wte(scaled_logits)
             xs = torch.cat((x, scaled_logits_embedding), dim=1)
-            
-        
-        
+
+
+
         return xs, B_motion
 
 
-    
+
     #--------------Test classification head--------------------
     def sample_for_eval_classification(self, clip_text, if_categorial=False, length=196, clip_model=None, device=torch.device('cuda'), tokenizer='clip', unit_length=4):
-        
+
         import clip
-       
-        
-        for k in range(51): 
+
+
+        for k in range(51):
             if k == 0:
                 x = []
             else:
                 x = xs
 
             if tokenizer == 'clip':
-                text = clip.tokenize(clip_text, truncate=True).to(device)  
+                text = clip.tokenize(clip_text, truncate=True).to(device)
 
-                feat_clip_text = clip_model.encode_text(text).float() 
+                feat_clip_text = clip_model.encode_text(text).float()
             elif tokenizer == 't5-xxl':
-                feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()  
-           
+                feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()
+
             conditions = self.forward(x, feat_clip_text)
-            conditions = conditions[:, -1, :]     
+            conditions = conditions[:, -1, :]
 
             empty_clip_text = ''
             if tokenizer == 'clip':
                 empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
                 empty_feat_clip_text = clip_model.encode_text(empty_text).float()
             elif tokenizer == 't5-xxl':
-                empty_feat_clip_text = torch.from_numpy(clip_model.module.encode(empty_clip_text)).float()  
+                empty_feat_clip_text = torch.from_numpy(clip_model.module.encode(empty_clip_text)).float()
                 empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
                 empty_feat_clip_text = empty_feat_clip_text.to(device)
 
-            empty_conditions = self.forward(x, empty_feat_clip_text)     
-            empty_conditions = empty_conditions[:, -1, :]                    
-           
+            empty_conditions = self.forward(x, empty_feat_clip_text)
+            empty_conditions = empty_conditions[:, -1, :]
+
             temperature = 1.0
             cfg = 7.5
-            
-            mix_conditions = torch.cat([conditions, empty_conditions], dim=0) 
-            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+
+            mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+            sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
             # chunk
             if cfg != 1:
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)        
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
             else:
                 scaled_logits = sampled_token_latent
 
 
-            prediction_logits = self.classify_head(conditions)  
+            prediction_logits = self.classify_head(conditions)
             probs = torch.sigmoid(prediction_logits)
             predicted_classes = torch.argmax(probs, dim=-1)
-            
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-                
+
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if k == 0:
                 xs = scaled_logits
             else:
@@ -699,71 +699,71 @@ class LLaMAHF(nn.Module):
                 break
 
         return xs
-    
+
 
     #--------------------Test CFG-----------------------
     def sample_for_eval_CFG_test(self, clip_text, if_categorial=False, length=196, clip_model=None, cfg=1, device=torch.device('cuda'), tokenizer='clip', unit_length=4):
 
         import clip
         max_token_len = length // unit_length
-        
-        
-        for k in range(max_token_len): 
+
+
+        for k in range(max_token_len):
             if k == 0:
                 x = []
             else:
                 x = xs
 
-            
+
             if cfg != 1:
                 if tokenizer == 'clip':
-                    text = clip.tokenize(clip_text, truncate=True).to(device)  
+                    text = clip.tokenize(clip_text, truncate=True).to(device)
 
-                    feat_clip_text = clip_model.encode_text(text).float() 
+                    feat_clip_text = clip_model.encode_text(text).float()
                 elif tokenizer == 't5-xxl':
-                    feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()  
-                
-                conditions = self.forward(x, feat_clip_text)       
-                
-                conditions = conditions[:, -1, :]                            
+                    feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()
+
+                conditions = self.forward(x, feat_clip_text)
+
+                conditions = conditions[:, -1, :]
                 empty_clip_text = ''
                 if tokenizer == 'clip':
                     empty_text = clip.tokenize(empty_clip_text, truncate=True).to(device)
                     empty_feat_clip_text = clip_model.encode_text(empty_text).float()
                 elif tokenizer == 't5-xxl':
-                    empty_feat_clip_text = torch.from_numpy(clip_model.module.encode(empty_clip_text)).float()   
+                    empty_feat_clip_text = torch.from_numpy(clip_model.module.encode(empty_clip_text)).float()
                     empty_feat_clip_text = empty_feat_clip_text.unsqueeze(0)
                     empty_feat_clip_text = empty_feat_clip_text.to(device)
 
-                empty_conditions = self.forward(x, empty_feat_clip_text)     
-                empty_conditions = empty_conditions[:, -1, :]                             
+                empty_conditions = self.forward(x, empty_feat_clip_text)
+                empty_conditions = empty_conditions[:, -1, :]
                 temperature = 1.0
-                
-                
-                mix_conditions = torch.cat([conditions, empty_conditions], dim=0)     
-                sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)  
+
+
+                mix_conditions = torch.cat([conditions, empty_conditions], dim=0)
+                sampled_token_latent = self.diff_loss.sample(mix_conditions, temperature=temperature, cfg=cfg)
 
                 # chunk
-                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)           
-            
-            else:   
+                scaled_logits, _ = sampled_token_latent.chunk(2, dim=0)
+
+            else:
                 if tokenizer == 'clip':
-                    text = clip.tokenize(clip_text, truncate=True).to(device)  
-                    feat_clip_text = clip_model.encode_text(text).float() 
+                    text = clip.tokenize(clip_text, truncate=True).to(device)
+                    feat_clip_text = clip_model.encode_text(text).float()
                 elif tokenizer == 't5-xxl':
-                    feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()  
+                    feat_clip_text = torch.from_numpy(clip_model.module.encode(clip_text)).float()
                     feat_clip_text = feat_clip_text.to(device)
 
 
-                conditions = self.forward(x, feat_clip_text)       
-  
-                conditions = conditions[:, -1, :]                             
-                temperature = 1.0
-                sampled_token_latent = self.diff_loss.sample(conditions, temperature=temperature, cfg=cfg) 
-                scaled_logits = sampled_token_latent       
+                conditions = self.forward(x, feat_clip_text)
 
-            scaled_logits = scaled_logits.unsqueeze(0)      
-                
+                conditions = conditions[:, -1, :]
+                temperature = 1.0
+                sampled_token_latent = self.diff_loss.sample(conditions, temperature=temperature, cfg=cfg)
+                scaled_logits = sampled_token_latent
+
+            scaled_logits = scaled_logits.unsqueeze(0)
+
             if k == 0:
                 xs = scaled_logits
             else:
@@ -784,30 +784,30 @@ class LLaMAHF(nn.Module):
             ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
             # forward the LLaMA model itself
-            token_embeddings = self.transformer.wte(idx)  
-            text_embeddings = self.transformer.cond_embed(clip_feature).unsqueeze(1)        
-            token_embeddings = torch.cat([text_embeddings, token_embeddings], dim=1) 
-        
+            token_embeddings = self.transformer.wte(idx)
+            text_embeddings = self.transformer.cond_embed(clip_feature).unsqueeze(1)
+            token_embeddings = torch.cat([text_embeddings, token_embeddings], dim=1)
+
         x = token_embeddings
 
         # -------------------kv cache-------------------
         #presents = () if use_cache else None
         if use_cache:
             if past_key_values is None:
-                past_key_values = [None] * len(self.transformer.h)   
-            
+                past_key_values = [None] * len(self.transformer.h)
+
 
         for i,block in enumerate(self.transformer.h):
             if use_cache:
-                last_past = past_key_values[i]     
+                last_past = past_key_values[i]
                 x, presents = block(x, last_past, use_cache)
                 past_key_values[i] = list(presents)
             else:
                 x = block(x)
         x = self.transformer.ln_f(x)
 
-        logits = self.lm_head(x) 
-        
+        logits = self.lm_head(x)
+
 
         return logits
 
@@ -824,15 +824,15 @@ class LLaMAHF(nn.Module):
             ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
             # forward the LLaMA model itself
-            token_embeddings = self.transformer.wte(idx)  
-            text_embeddings = self.transformer.cond_embed(feature).unsqueeze(1)    
-            token_embeddings = torch.cat([text_embeddings, token_embeddings], dim=1) 
-        
-        x = token_embeddings  
+            token_embeddings = self.transformer.wte(idx)
+            text_embeddings = self.transformer.cond_embed(feature).unsqueeze(1)
+            token_embeddings = torch.cat([text_embeddings, token_embeddings], dim=1)
+
+        x = token_embeddings
 
         for i,block in enumerate(self.transformer.h):
             x = block(x)
-        x = self.transformer.ln_f(x)    
+        x = self.transformer.ln_f(x)
         logits = self.out_proj(x)
         return logits
 
@@ -849,24 +849,24 @@ class LLaMAHF(nn.Module):
             ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
             # forward the LLaMA model itself
-            token_embeddings = self.transformer.wte(idx)  
-            text_embeddings = self.transformer.cond_embed(feature).unsqueeze(0)    
-            token_embeddings = torch.cat([text_embeddings.unsqueeze(0), token_embeddings], dim=1) 
-        
-        x = token_embeddings  
+            token_embeddings = self.transformer.wte(idx)
+            text_embeddings = self.transformer.cond_embed(feature).unsqueeze(0)
+            token_embeddings = torch.cat([text_embeddings.unsqueeze(0), token_embeddings], dim=1)
+
+        x = token_embeddings
 
         if len(x.shape) == 2:
             x = x.unsqueeze(0)
 
         for i,block in enumerate(self.transformer.h):
             x = block(x)
-        x = self.transformer.ln_f(x)    
+        x = self.transformer.ln_f(x)
         logits = self.out_proj(x)
         return logits
-        
+
 
     def babel_long(self, idx: torch.Tensor, clip_feature: torch.Tensor, use_cache=False, past_key_values=None, num_subseq=None, length=None) -> torch.Tensor:
-        
+
         b, t, c = idx.size()
         idx = idx.float()
         idx = self.transformer.wte(idx)
@@ -874,7 +874,7 @@ class LLaMAHF(nn.Module):
                 t <= self.config.block_size
             ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         for i in range(b):
-            length_i = length[i][:num_subseq[i]]       
+            length_i = length[i][:num_subseq[i]]
             clip_feature_i = clip_feature[i][:num_subseq[i]]
 
             pointer = 0
@@ -886,18 +886,18 @@ class LLaMAHF(nn.Module):
 
                 clip_feature_i_j = self.transformer.cond_embed(clip_feature_i[j].unsqueeze(0)).unsqueeze(1)
                 idx[i] = torch.cat([idx[i][:pointer].unsqueeze(0), clip_feature_i_j, idx[i][pointer:-1].unsqueeze(0)], dim=1)[0]
-                
+
         x = idx
 
 
         if use_cache:
             if past_key_values is None:
-                past_key_values = [None] * len(self.transformer.h)   
-            
+                past_key_values = [None] * len(self.transformer.h)
+
 
         for i,block in enumerate(self.transformer.h):
             if use_cache:
-                last_past = past_key_values[i]      
+                last_past = past_key_values[i]
                 x, presents = block(x, last_past, use_cache)
                 past_key_values[i] = list(presents)
             else:
@@ -906,7 +906,7 @@ class LLaMAHF(nn.Module):
 
         logits = self.out_proj(x)
         return logits
-        
+
 
     def forward_babel_eval(self, x, return_attention=False) -> torch.Tensor:
         layer_attentions = []
@@ -916,17 +916,17 @@ class LLaMAHF(nn.Module):
                 layer_attentions.append(att)
             else:
                 x = block(x)
-        
+
         x = self.transformer.ln_f(x)
         if self.use_out_proj:
             logits = self.out_proj(x)
         else:
             logits = x
-        
+
         if return_attention:
             return logits, layer_attentions
         return logits
-    
+
     def forward_babel(self, idx: torch.Tensor, clip_feature: torch.Tensor, A_token_length) -> torch.Tensor:
         if len(idx) == 0:   # inference
             token_embeddings = self.transformer.cond_embed(clip_feature).unsqueeze(1)
@@ -938,10 +938,10 @@ class LLaMAHF(nn.Module):
                 t <= self.config.block_size
             ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
-            
 
-            A_feature = clip_feature[:, 0, :]             
-            B_feature = clip_feature[:, 1, :]                   
+
+            A_feature = clip_feature[:, 0, :]
+            B_feature = clip_feature[:, 1, :]
 
 
             A_text_embeddings = self.transformer.cond_embed(A_feature).unsqueeze(1)
@@ -952,7 +952,7 @@ class LLaMAHF(nn.Module):
                 A_idx = idx[i, :A_token_length[i].item(), :]
                 B_idx = idx[i, A_token_length[i].item():-2, :]
                 token_embeddings[i, :, :] = torch.cat([A_text_embeddings[i], self.BOM_tag, self.transformer.wte(A_idx), B_text_embeddings[i], self.BOM_tag, self.transformer.wte(B_idx)], dim=0)  #token_embeddings.shape = (b,t+1,1024)
-        
+
         x = token_embeddings
         for block in self.transformer.h:
             x = block(x)
@@ -982,10 +982,10 @@ class LLaMAHF(nn.Module):
 
             idx_embeddings = self.transformer.wte(idx)
 
-            
+
             token_embeddings = torch.cat([B_text_embeddings, idx_embeddings], dim=1)
-            
-        
+
+
         x = token_embeddings
         for block in self.transformer.h:
             x = block(x)
@@ -997,7 +997,7 @@ class LLaMAHF(nn.Module):
             logits = x
 
         return logits
-    
+
 
     def resize_token_embeddings(
         self, new_num_tokens: Optional[int] = None, pad_to_multiple_of: Optional[int] = None, using_old_initilization: bool = False
@@ -1036,7 +1036,7 @@ class LLaMAHF(nn.Module):
         # self.tie_weights()
 
         return model_embeds
-    
+
     def _resize_token_embeddings(self, new_num_tokens, pad_to_multiple_of=None):
         old_embeddings = self.get_input_embeddings()
         new_embeddings = self._get_resized_embeddings(old_embeddings, new_num_tokens, pad_to_multiple_of)
@@ -1067,7 +1067,7 @@ class LLaMAHF(nn.Module):
             self.set_output_embeddings(new_lm_head)
 
         return self.get_input_embeddings()
-    
+
     def _get_resized_embeddings(
         self,
         old_embeddings: nn.Embedding,
@@ -1285,12 +1285,12 @@ class Block(nn.Module):
         self.rms_1 = RMSNorm(config.n_embd)
 
         # sentence level:
-        self.attn = CausalSelfAttention(config)        
+        self.attn = CausalSelfAttention(config)
         self.rms_2 = RMSNorm(config.n_embd)
         self.mlp = MLP(config)
 
     def forward(self, x: torch.Tensor, last_past=None, use_cache=False, return_attention=False) -> torch.Tensor:
-        if use_cache:  
+        if use_cache:
             if return_attention:
                 a, attn = self.attn.forward_attn(self.rms_1(x), last_past, use_cache)
             else:
@@ -1308,7 +1308,7 @@ class Block(nn.Module):
             if return_attention:
                 return x, present, attn
             else:
-                return x, present  
+                return x, present
         else:
             if return_attention:
                 return x, attn
@@ -1333,7 +1333,7 @@ class CausalSelfAttention(nn.Module):
 
         def scaling_factor(sequence_threshold):
             return np.log2((sequence_threshold**2) - sequence_threshold)
-        scale_init = scaling_factor(self.block_size) 
+        scale_init = scaling_factor(self.block_size)
         self.scale = nn.Parameter(torch.tensor(scale_init))
 
     def forward(self, x: torch.Tensor, last_past=None, use_cache=False) -> torch.Tensor:
@@ -1351,8 +1351,8 @@ class CausalSelfAttention(nn.Module):
         if use_cache:
             if last_past is not None:
                 past_key, past_value = last_past
-                k = torch.cat([past_key, k], dim=-2)  
-                v = torch.cat([past_value, v], dim=-2)   
+                k = torch.cat([past_key, k], dim=-2)
+                v = torch.cat([past_value, v], dim=-2)
             # else:
             #     key_states = k
             #     value_states = v
@@ -1370,7 +1370,7 @@ class CausalSelfAttention(nn.Module):
             # cache for future forward calls
             self.rope_cache = build_rope_cache(
                 seq_len=self.block_size,
-                n_elem=self.n_embd // self.n_head, 
+                n_elem=self.n_embd // self.n_head,
                 dtype=x.dtype,
                 device=x.device,
             )
@@ -1380,7 +1380,7 @@ class CausalSelfAttention(nn.Module):
         k = apply_rope(k, self.rope_cache)
 
 
-        
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         #  att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         #  att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
@@ -1389,13 +1389,13 @@ class CausalSelfAttention(nn.Module):
 
         # efficient attention using Flash Attention CUDA kernels
         y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True, scale=self.scale.item())
-        
+
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.c_proj(y)
 
-        
+
         if use_cache:
             return y, present
         return y
@@ -1415,8 +1415,8 @@ class CausalSelfAttention(nn.Module):
         if use_cache:
             if last_past is not None:
                 past_key, past_value = last_past
-                k = torch.cat([past_key, k], dim=-2)  
-                v = torch.cat([past_value, v], dim=-2) 
+                k = torch.cat([past_key, k], dim=-2)
+                v = torch.cat([past_value, v], dim=-2)
             # else:
             #     key_states = k
             #     value_states = v
@@ -1434,7 +1434,7 @@ class CausalSelfAttention(nn.Module):
             # cache for future forward calls
             self.rope_cache = build_rope_cache(
                 seq_len=self.block_size,
-                n_elem=self.n_embd // self.n_head, 
+                n_elem=self.n_embd // self.n_head,
                 dtype=x.dtype,
                 device=x.device,
             )
@@ -1453,7 +1453,7 @@ class CausalSelfAttention(nn.Module):
 
         # output projection
         y = self.c_proj(y)
-        
+
         return y, att
 
 class LengthCausalSelfAttention(nn.Module):
@@ -1486,7 +1486,7 @@ class LengthCausalSelfAttention(nn.Module):
             # cache for future forward calls
             self.rope_cache = build_rope_cache(
                 seq_len=self.block_size,
-                n_elem=self.n_embd // self.n_head, 
+                n_elem=self.n_embd // self.n_head,
                 dtype=x.dtype,
                 device=x.device,
             )
@@ -1496,9 +1496,9 @@ class LengthCausalSelfAttention(nn.Module):
         # q: 128, 16, 106, 64
         q = apply_rope(q, self.rope_cache)
         k = apply_rope(k, self.rope_cache)
- 
+
         attn_mask = torch.ones(T, T, dtype=torch.bool, device=x.device)
-        attn_mask = torch.tril(attn_mask) 
+        attn_mask = torch.tril(attn_mask)
         attn_mask = attn_mask.unsqueeze(0).expand(B, -1, -1)
 
         text_mask = y_mask.unsqueeze(2)*y_mask.unsqueeze(1)
@@ -1507,9 +1507,9 @@ class LengthCausalSelfAttention(nn.Module):
 
         y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask.unsqueeze(1), dropout_p=0.0, is_causal=False)
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C) 
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-     
+
         y = self.c_proj(y)
 
         return y
@@ -1529,7 +1529,7 @@ class MLP(nn.Module):
         self.c_proj = nn.Linear(n_hidden, config.n_embd, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-       
+
         x = F.silu(self.c_fc1(x)) * self.c_fc2(x)
         x = self.c_proj(x)
         return x

@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 import math
 from timm.layers.mlp import SwiGLU
-from models.diffusion import create_diffusion
+from .diffusion import create_diffusion
 
 
 class DiffLoss(nn.Module):

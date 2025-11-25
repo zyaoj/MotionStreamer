@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from models.resnet import CausalResnet1D
+from .resnet import CausalResnet1D
 
 
 class CausalConv1d(nn.Module):

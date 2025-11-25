@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motion-streamer"
+version = "1.0.0"
+description = "MotionStreamer: Streaming Motion Generation via Diffusion-based Autoregressive Model in Causal Latent Space"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["motion-generation", "text-to-motion", "diffusion", "streaming", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.22.0",
+    "sentence-transformers>=3.0.0",
+    "tqdm",
+    "opencv-python",
+    "imageio[ffmpeg]",
+    "trimesh",
+    "pyrender",
+    "PyOpenGL",
+    "scipy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+training = [
+    "pytorch-lightning>=1.7.0",
+    "tensorboard",
+    "omegaconf",
+    "huggingface-hub",
+    "diffusers",
+    "accelerate",
+]
+all = [
+    "pytorch-lightning>=1.7.0",
+    "tensorboard",
+    "omegaconf",
+    "huggingface-hub",
+    "diffusers",
+    "accelerate",
+]
+
+[tool.setuptools]
+# Explicitly list all packages and modules to include
+packages = [
+    "motion_streamer",
+    "motion_streamer.models",
+    "motion_streamer.models.diffusion",
+    "motion_streamer.visualization",
+    "motion_streamer.utils",
+    "motion_streamer.options",
+    "motion_streamer.humanml3d_272",
+    "motion_streamer.Evaluator_272",
+]
+
+# Map motion_streamer package to the current directory
+[tool.setuptools.package-dir]
+"motion_streamer" = "."
+"motion_streamer.models" = "models"
+"motion_streamer.visualization" = "visualization"
+"motion_streamer.utils" = "utils"
+"motion_streamer.options" = "options"
+"motion_streamer.humanml3d_272" = "humanml3d_272"
+"motion_streamer.Evaluator_272" = "Evaluator_272"
+
+# Include Python files at the root level
+[tool.setuptools.package-data]
+motion_streamer = ["*.py", "*.npy"]
