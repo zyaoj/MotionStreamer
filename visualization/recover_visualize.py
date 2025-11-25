@@ -8,11 +8,11 @@
 # 8+6*njoint:8+12*njoint local rotations, 6d rotation, no heading, all frames z+
 
 import numpy as np
-from utils.face_z_align_util import rotation_6d_to_matrix, matrix_to_axis_angle
+from ..utils.face_z_align_util import rotation_6d_to_matrix, matrix_to_axis_angle
 import copy
 import torch
 import os
-import visualization.plot_3d_global as plot_3d
+from . import plot_3d_global as plot_3d
 import argparse
 import tqdm
 # from visualization.smplx2joints import process_smplx_data
@@ -43,7 +43,7 @@ def my_quat_rotate(q, v):
             shape[0], 3, 1)).squeeze(-1) * 2.0
     return a + b + c
 
-    
+
 def calc_heading(q):
     ref_dir = torch.zeros_like(q[..., 0:3])
     ref_dir[..., 2] = 1
@@ -67,7 +67,7 @@ def accumulate_rotations(relative_rotations):
     # Iterate through all relative rotations, accumulating them
     for R_rel in relative_rotations[1:]:
         R_total.append(np.matmul(R_rel, R_total[-1]))
-    
+
     return np.array(R_total)
 
 def recover_from_local_position(final_x, njoint):
@@ -142,7 +142,7 @@ def visualize_smpl_85(data, title=None, output_path='visualize_result', name='',
     smpl_85_data = data
     if len(smpl_85_data.shape) == 3:
        smpl_85_data = np.squeeze(smpl_85_data, axis=0)
-    
+
     smpl_85_data = smpl85_2_smpl322(smpl_85_data)
     vert, joints, motion, faces = process_smplx_data(smpl_85_data, norm_global_orient=False, transform=False)
     xyz = joints[:, :22, :].reshape(1, -1, 22, 3).detach().cpu().numpy()
@@ -153,7 +153,7 @@ def visualize_smpl_85(data, title=None, output_path='visualize_result', name='',
 
 def visualize_pos_xyz(xyz, title_batch=None, output_path='./', name='', fps=30):
     # xyz: torch.Size([nframe, 22, 3])
-    xyz = xyz[:1]   
+    xyz = xyz[:1]
     bs, seq = xyz.shape[:2]
     xyz = xyz.reshape(bs, seq, -1, 3)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -169,7 +169,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', type=str, required=True, help='Output path')
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     for data_path in tqdm.tqdm(findAllFile(args.input_dir, endswith='.npy')):
         data_272 = np.load(data_path)
         if args.mode == 'rot':
