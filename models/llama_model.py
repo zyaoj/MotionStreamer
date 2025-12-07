@@ -54,7 +54,7 @@ class LLaMAHF(nn.Module):
                 z_channels=config.n_embd,
                 width=width,
                 depth=num_diffusion_head_layers,
-                num_sampling_steps='50',
+                num_sampling_steps='20',
                 grad_checkpointing=False,
             )
         self.diff_loss = self.diff_loss.to(device)
