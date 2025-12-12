@@ -1,5 +1,6 @@
 
 import math
+import os
 from dataclasses import dataclass
 import numpy as np
 import torch
@@ -31,7 +32,7 @@ llama_configs = {
 
 
 class LLaMAHF(nn.Module):
-    def __init__(self, config: LLaMAHFConfig, num_diffusion_head_layers=9, input_token_dim=16, device=torch.device('cuda'), width=1792) -> None:
+    def __init__(self, config: LLaMAHFConfig, num_diffusion_head_layers=9, input_token_dim=16, device=torch.device('cuda'), width=1792, num_sampling_steps=None) -> None:
         super().__init__()
         assert config.block_size is not None
         self.config = config
@@ -49,12 +50,16 @@ class LLaMAHF(nn.Module):
 
         target_channels = input_token_dim
         from .diffloss import DiffLoss
+
+        if num_sampling_steps is None:
+            num_sampling_steps = os.getenv("NUM_SAMPLING_STEPS", "10")
+
         self.diff_loss = DiffLoss(
                 target_channels=target_channels,
                 z_channels=config.n_embd,
                 width=width,
                 depth=num_diffusion_head_layers,
-                num_sampling_steps='50',
+                num_sampling_steps=str(num_sampling_steps),
                 grad_checkpointing=False,
             )
         self.diff_loss = self.diff_loss.to(device)
