@@ -1335,6 +1335,8 @@ class CausalSelfAttention(nn.Module):
             return np.log2((sequence_threshold**2) - sequence_threshold)
         scale_init = scaling_factor(self.block_size)
         self.scale = nn.Parameter(torch.tensor(scale_init))
+        # Cache scale as Python float to avoid .item() calls that break torch.compile/CUDA graphs
+        self._scale_float = float(scale_init)
 
     def forward(self, x: torch.Tensor, last_past=None, use_cache=False) -> torch.Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
@@ -1388,7 +1390,8 @@ class CausalSelfAttention(nn.Module):
         #  y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         # efficient attention using Flash Attention CUDA kernels
-        y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True, scale=self.scale.item())
+        # Use cached float to avoid .item() calls that break torch.compile/CUDA graphs
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True, scale=self._scale_float)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
